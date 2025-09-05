@@ -115,20 +115,8 @@
         </div>
     </div>
     
-    <!-- Firebase SDKs 및 게임 로직을 단일 모듈 스크립트로 통합 -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        
-        // 전역 변수 설정
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : undefined;
-        
-        let db, auth;
-        let userId;
-
+    <!-- 게임 로직을 단일 모듈 스크립트로 통합 -->
+    <script>
         let timerInterval;
         const totalTime = 50; // 5초 (50 * 0.1초)
         let timeLeft = totalTime;
@@ -147,79 +135,26 @@
         const messageBoxText = document.getElementById('message-box-text');
         const restartButton = document.getElementById('restart-button');
         
-        // HTML Audio 객체 생성 (Howler.js 대신 사용)
+        // HTML Audio 객체 생성
         const clickSound = new Audio('./mixkit-dog-barking-twice-1.wav');
         const backgroundMusic = new Audio('./bass-and-claps-260658.mp3');
         backgroundMusic.loop = true;
         backgroundMusic.volume = 0.3;
-        clickSound.volume = 0.01;
+        clickSound.volume = 0.1;
 
-        // Firebase 초기화 및 인증
-        async function initializeFirebase() {
-            try {
-                if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
-                    console.warn("Firebase 설정이 올바르지 않아 최고 점수 기능을 사용할 수 없습니다.");
-                    return;
-                }
-
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        userId = user.uid;
-                        await loadHighScore();
-                    } else {
-                        // 사용자가 로그인되어 있지 않으면 익명 로그인 시도
-                        if (initialAuthToken) {
-                            await signInWithCustomToken(auth, initialAuthToken);
-                        } else {
-                            await signInAnonymously(auth);
-                        }
-                    }
-                });
-
-            } catch (error) {
-                console.error("Firebase 초기화 중 오류 발생: ", error);
+        // 최고 점수 불러오기 (localStorage 사용)
+        function loadHighScore() {
+            const storedScore = localStorage.getItem('highScore');
+            if (storedScore !== null) {
+                currentHighScore = parseInt(storedScore, 10);
             }
+            highScoreEl.textContent = currentHighScore;
         }
 
-        // 최고 점수 불러오기
-        async function loadHighScore() {
-            // Firebase가 초기화되지 않았으면 함수 종료
-            if (!db) {
-                console.warn("Firebase 데이터베이스를 사용할 수 없습니다.");
-                return;
-            }
-
-            const highScoresRef = doc(db, `artifacts/${appId}/public/data/click_game`, 'high_score');
-            
-            // onSnapshot을 사용하여 실시간으로 최고 점수를 업데이트
-            onSnapshot(highScoresRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    currentHighScore = docSnap.data().score || 0;
-                }
-                highScoreEl.textContent = currentHighScore;
-            }, (error) => {
-                console.error("최고 점수 불러오기 실패:", error);
-            });
-        }
-
-        // 최고 점수 업데이트
-        async function updateHighScore(newScore) {
-            if (!db || !userId) {
-                console.warn("Firebase에 연결되지 않았거나 사용자가 인증되지 않아 최고 점수를 업데이트할 수 없습니다.");
-                return;
-            }
-
-            const highScoresRef = doc(db, `artifacts/${appId}/public/data/click_game`, 'high_score');
-            try {
-                await setDoc(highScoresRef, { score: newScore });
-                console.log("최고 점수가 성공적으로 업데이트되었습니다:", newScore);
-            } catch (error) {
-                console.error("최고 점수 업데이트 실패:", error);
-            }
+        // 최고 점수 업데이트 (localStorage 사용)
+        function updateHighScore(newScore) {
+            localStorage.setItem('highScore', newScore);
+            highScoreEl.textContent = newScore;
         }
 
         // 배경색 변경 함수
@@ -265,9 +200,7 @@
             if (clickCount > currentHighScore) {
                 messageTitle = "신기록 달성!";
                 messageText = `축하합니다! ${clickCount}번 클릭하여 새로운 최고 기록을 세웠습니다.`;
-                if (userId) {
-                    await updateHighScore(clickCount);
-                }
+                updateHighScore(clickCount);
             } else {
                 messageTitle = "게임 종료";
                 messageText = `최종 기록: ${clickCount}번. 최고 기록(${currentHighScore})에 도전해 보세요!`;
@@ -319,9 +252,9 @@
             resetGame();
         });
         
-        // 페이지 로드 시 Firebase 초기화
+        // 페이지 로드 시 최고 기록 불러오기
         window.onload = function() {
-            initializeFirebase();
+            loadHighScore();
         };
     </script>
 </body>
