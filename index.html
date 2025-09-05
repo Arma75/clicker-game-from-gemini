@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>클릭 경쟁 게임</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #000;
+            transition: background-color 0.5s ease-in-out;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            overflow: hidden;
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            width: 100vw;
+            position: relative;
+            cursor: pointer;
+        }
+        
+        .timer, .count {
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .start-message {
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        .message-box-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+        }
+
+        .message-box {
+            background-color: #2d3748;
+            padding: 2.5rem;
+            border-radius: 1.5rem;
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.2);
+            text-align: center;
+            max-width: 90%;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .button-shadow {
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            transition: all 0.2s ease-in-out;
+        }
+        .button-shadow:hover {
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white">
+    <div id="game-container" class="game-container">
+        
+        <!-- 게임 UI -->
+        <div class="absolute top-8 w-full flex justify-center z-10">
+            <div class="flex flex-col items-center">
+                <p class="text-xs sm:text-sm md:text-base text-gray-400">남은 시간</p>
+                <p id="timer" class="timer text-4xl sm:text-5xl md:text-6xl font-bold text-yellow-400">5.0</p>
+            </div>
+        </div>
+
+        <div class="absolute top-8 right-8 z-10">
+             <div class="flex flex-col items-end">
+                <p class="text-xs sm:text-sm md:text-base text-gray-400">최고 기록</p>
+                <p id="high-score" class="text-xl sm:text-2xl md:text-3xl font-bold text-teal-400">0</p>
+            </div>
+        </div>
+        
+        <div class="flex flex-col items-center">
+            <p class="text-xs sm:text-sm md:text-base text-gray-400">클릭 횟수</p>
+            <p id="click-count" class="count text-8xl sm:text-9xl md:text-[10rem] font-black">0</p>
+        </div>
+
+        <!-- 게임 메시지 -->
+        <div id="message" class="absolute bottom-1/4 text-xl sm:text-2xl md:text-3xl font-medium start-message">탭해서 시작!</div>
+    </div>
+    
+    <!-- 메시지 박스 -->
+    <div id="message-box-overlay" class="message-box-overlay hidden">
+        <div class="message-box">
+            <h2 id="message-box-title" class="text-2xl sm:text-3xl font-bold text-white"></h2>
+            <p id="message-box-text" class="text-sm sm:text-base text-gray-300"></p>
+            <button id="restart-button" class="bg-teal-500 text-white py-3 px-6 rounded-full font-bold uppercase tracking-wide button-shadow">다시하기</button>
+        </div>
+    </div>
+    
+    <!-- Firebase SDKs 및 게임 로직을 단일 모듈 스크립트로 통합 -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // 전역 변수 설정
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : undefined;
+        
+        let db, auth;
+        let userId;
+
+        let timerInterval;
+        const totalTime = 50; // 5초 (50 * 0.1초)
+        let timeLeft = totalTime;
+        let clickCount = 0;
+        let gameIsRunning = false;
+        let gameIsOver = false;
+        let currentHighScore = 0;
+
+        const timerEl = document.getElementById('timer');
+        const clickCountEl = document.getElementById('click-count');
+        const highScoreEl = document.getElementById('high-score');
+        const gameContainer = document.getElementById('game-container');
+        const messageEl = document.getElementById('message');
+        const messageBoxOverlay = document.getElementById('message-box-overlay');
+        const messageBoxTitle = document.getElementById('message-box-title');
+        const messageBoxText = document.getElementById('message-box-text');
+        const restartButton = document.getElementById('restart-button');
+        
+        // HTML Audio 객체 생성 (Howler.js 대신 사용)
+        const clickSound = new Audio('./mixkit-dog-barking-twice-1.wav');
+        const backgroundMusic = new Audio('./bass-and-claps-260658.mp3');
+        backgroundMusic.loop = true;
+        backgroundMusic.volume = 0.3;
+        clickSound.volume = 0.01;
+
+        // Firebase 초기화 및 인증
+        async function initializeFirebase() {
+            try {
+                if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
+                    console.warn("Firebase 설정이 올바르지 않아 최고 점수 기능을 사용할 수 없습니다.");
+                    return;
+                }
+
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        await loadHighScore();
+                    } else {
+                        // 사용자가 로그인되어 있지 않으면 익명 로그인 시도
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error("Firebase 초기화 중 오류 발생: ", error);
+            }
+        }
+
+        // 최고 점수 불러오기
+        async function loadHighScore() {
+            // Firebase가 초기화되지 않았으면 함수 종료
+            if (!db) {
+                console.warn("Firebase 데이터베이스를 사용할 수 없습니다.");
+                return;
+            }
+
+            const highScoresRef = doc(db, `artifacts/${appId}/public/data/click_game`, 'high_score');
+            
+            // onSnapshot을 사용하여 실시간으로 최고 점수를 업데이트
+            onSnapshot(highScoresRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    currentHighScore = docSnap.data().score || 0;
+                }
+                highScoreEl.textContent = currentHighScore;
+            }, (error) => {
+                console.error("최고 점수 불러오기 실패:", error);
+            });
+        }
+
+        // 최고 점수 업데이트
+        async function updateHighScore(newScore) {
+            if (!db || !userId) {
+                console.warn("Firebase에 연결되지 않았거나 사용자가 인증되지 않아 최고 점수를 업데이트할 수 없습니다.");
+                return;
+            }
+
+            const highScoresRef = doc(db, `artifacts/${appId}/public/data/click_game`, 'high_score');
+            try {
+                await setDoc(highScoresRef, { score: newScore });
+                console.log("최고 점수가 성공적으로 업데이트되었습니다:", newScore);
+            } catch (error) {
+                console.error("최고 점수 업데이트 실패:", error);
+            }
+        }
+
+        // 배경색 변경 함수
+        function updateBackgroundColor() {
+            const hue = (clickCount * 10) % 360;
+            document.body.style.backgroundColor = `hsl(${hue}, 70%, 20%)`;
+        }
+
+        // 게임 시작
+        function startGame() {
+            if (gameIsRunning) return;
+
+            gameIsRunning = true;
+            gameIsOver = false;
+            clickCount = 0;
+            timeLeft = totalTime;
+            
+            clickCountEl.textContent = clickCount;
+            messageEl.classList.add('hidden');
+            
+            backgroundMusic.play().catch(e => console.error("배경 음악 재생 실패:", e));
+
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                timerEl.textContent = (timeLeft / 10).toFixed(1);
+
+                if (timeLeft <= 0) {
+                    endGame();
+                }
+            }, 100);
+        }
+
+        // 게임 종료
+        async function endGame() {
+            clearInterval(timerInterval);
+            gameIsRunning = false;
+            gameIsOver = true; // 게임 종료 상태로 설정
+            backgroundMusic.pause();
+            backgroundMusic.currentTime = 0;
+            document.body.style.backgroundColor = '#000'; // 배경색 초기화
+            
+            let messageTitle, messageText;
+            if (clickCount > currentHighScore) {
+                messageTitle = "신기록 달성!";
+                messageText = `축하합니다! ${clickCount}번 클릭하여 새로운 최고 기록을 세웠습니다.`;
+                if (userId) {
+                    await updateHighScore(clickCount);
+                }
+            } else {
+                messageTitle = "게임 종료";
+                messageText = `최종 기록: ${clickCount}번. 최고 기록(${currentHighScore})에 도전해 보세요!`;
+            }
+            
+            showMessageBox(messageTitle, messageText);
+        }
+
+        // 메시지 박스 표시
+        function showMessageBox(title, text) {
+            messageBoxTitle.textContent = title;
+            messageBoxText.textContent = text;
+            messageBoxOverlay.classList.remove('hidden');
+        }
+
+        // 게임 리셋
+        function resetGame() {
+            clickCount = 0;
+            timeLeft = totalTime;
+            clickCountEl.textContent = clickCount;
+            timerEl.textContent = (totalTime / 10).toFixed(1);
+            messageEl.classList.remove('hidden');
+            messageBoxOverlay.classList.add('hidden');
+            gameIsOver = false; // 게임 리셋 시 false로 설정
+        }
+        
+        // 클릭 이벤트 핸들러
+        gameContainer.addEventListener('click', () => {
+            // 게임이 종료된 상태에서는 클릭을 무시합니다.
+            if (gameIsOver) {
+                return;
+            }
+            
+            if (!gameIsRunning) {
+                startGame();
+            } else {
+                clickCount++;
+                clickCountEl.textContent = clickCount;
+                updateBackgroundColor();
+                // HTML Audio 객체를 복제하여 재생, 소리 충돌 방지
+                const soundClone = clickSound.cloneNode();
+                soundClone.volume = 0.1;
+                soundClone.play().catch(e => console.error("클릭 사운드 재생 실패:", e));
+            }
+        });
+
+        // 리셋 버튼 이벤트
+        restartButton.addEventListener('click', () => {
+            resetGame();
+        });
+        
+        // 페이지 로드 시 Firebase 초기화
+        window.onload = function() {
+            initializeFirebase();
+        };
+    </script>
+</body>
+</html>
